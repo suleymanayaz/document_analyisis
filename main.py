@@ -4,10 +4,12 @@ import glob
 import multiprocessing as mp
 import os
 import time
+import numpy as np
 import cv2
 import tqdm
 import uuid
-
+import shutil
+import json
 from pdf2image import convert_from_path
 from detectron2.config import get_cfg
 from detectron2.data.detection_utils import read_image
@@ -20,8 +22,21 @@ MetadataCatalog.get("dla_val").thing_classes = ['text', 'title', 'list', 'table'
 
 # constants
 WINDOW_NAME = "COCO detections"
+datas=[]
 
-
+class NumpyEncoder(json.JSONEncoder):
+    """ Special json encoder for numpy types """
+    def default(self, obj):
+        if isinstance(obj, (np.int_, np.intc, np.intp, np.int8,
+                            np.int16, np.int32, np.int64, np.uint8,
+                            np.uint16, np.uint32, np.uint64)):
+            return int(obj)
+        elif isinstance(obj, (np.float_, np.float16, np.float32,
+                              np.float64)):
+            return float(obj)
+        elif isinstance(obj, (np.ndarray,)):
+            return obj.tolist()
+        return json.JSONEncoder.default(self, obj)
 
 def setup_cfg(args):
     # load config from file and command-line arguments
@@ -50,6 +65,7 @@ def createMetaData(predictions, image, documentName, page):
 
     for index, item in enumerate(classes):
         if item == 4:
+            data = {}
             box = list(boxes)[index].detach().cpu().numpy()
             # Crop the PIL image using predicted box coordinates
             img_id=uuid.uuid4()
@@ -59,12 +75,18 @@ def createMetaData(predictions, image, documentName, page):
             print("pdf name: ",documentName)
             print("page: ",page)
             print("image id : ",img_id)
-            print("box : " ,boxes.tensor[index].numpy())
+            print("position : " ,boxes.tensor[index].numpy())
             print("score : ",scores[index].numpy())
             print("width:",crop_img.width,"px")
             print("height:",crop_img.height,"px")
-
-
+            data['pdfName'] = documentName
+            data['page'] = page
+            data['image_id'] = 1
+            data['position'] = boxes.tensor[index].numpy()
+            data['score'] = scores[index].numpy()
+            data['width'] = crop_img.width
+            data['height'] = crop_img.height
+            datas.append(data)
 
 
 def crop_object(image, box):
@@ -85,6 +107,20 @@ def crop_object(image, box):
   crop_img = image.crop((int(x_top_left), int(y_top_left), int(x_bottom_right), int(y_bottom_right)))
 
   return crop_img
+
+
+
+def clearOutputFolder():
+    folder = './output'
+    for filename in os.listdir(folder):
+        file_path = os.path.join(folder, filename)
+        try:
+            if os.path.isfile(file_path) or os.path.islink(file_path):
+                os.unlink(file_path)
+            elif os.path.isdir(file_path):
+                shutil.rmtree(file_path)
+        except Exception as e:
+            print('Failed to delete %s. Reason: %s' % (file_path, e))
 
 
 
@@ -134,22 +170,16 @@ if __name__ == "__main__":
     cfg = setup_cfg(args)
 
     demo = VisualizationDemo(cfg)
-    # TODO pdf to image array  inputs array index
-    # TODO convertPdfTOIMAGE() return array
-    # TODO createMetaData and CropImage method update
+
     # TODO simple figure configuration change
 
     if args.input:
+        clearOutputFolder()
         if len(args.input) == 1:
             args.input = glob.glob(os.path.expanduser(args.input[0]))
             assert args.input, "The input path(s) was not found"
 
         for path in tqdm.tqdm(args.input, disable=not args.output):
-            # use PIL, to be consistent with evaluation
-            #----------------------------------------------------
-
-
-            #-----------------------------------------------------
             fullPath, documentName = os.path.split(path)
 
             images = convertPdfToPngPerPage(path)
@@ -157,16 +187,13 @@ if __name__ == "__main__":
                 #Save pages as images in the pdf
                 #images[i].save('page' + str(i) + '.jpg', 'JPEG')
 
-            # -----------------------------------------------------
                 img= convert_PIL_to_numpy(images[page], format="BGR")
                 #img = read_image(path, format="BGR")
                 start_time = time.time()
                 #predictions, visualized_output= demo.run_on_image(img)
                 predictions = demo.run_on_image(img)
 
-    #----------------------------------------------------------------------
                 createMetaData(predictions, images[page], documentName, page+1)
-    # ----------------------------------------------------------------------
                 logger.info(
                     "{} , page {} :  detected {} instances in {:.2f}s".format(
                         path,page+1, len(predictions["instances"]), time.time() - start_time
@@ -188,6 +215,11 @@ if __name__ == "__main__":
                 if cv2.waitKey(0) == 27:
                     break  # esc to quit
             """
+
+        json_data = json.dumps(datas,cls=NumpyEncoder)
+        with open('./metadata/metadata.json', 'w') as f:
+            f.write(json_data)
+
     elif args.webcam:
         assert args.input is None, "Cannot have both --input and --webcam!"
         cam = cv2.VideoCapture(0)
