@@ -16,13 +16,16 @@ from detectron2.data.detection_utils import read_image
 from detectron2.utils.logger import setup_logger
 from detectron2.data.detection_utils import convert_PIL_to_numpy
 
+from detection import ObjectDetection
 from predictor import VisualizationDemo
 from detectron2.data import MetadataCatalog
+
 MetadataCatalog.get("dla_val").thing_classes = ['text', 'title', 'list', 'table', 'figure']
 
 # constants
 WINDOW_NAME = "COCO detections"
 datas=[]
+objDatas=[]
 
 class NumpyEncoder(json.JSONEncoder):
     """ Special json encoder for numpy types """
@@ -51,13 +54,16 @@ def setup_cfg(args):
     return cfg
 
 
+
+
 def convertPdfToPngPerPage(pdfPath):
     images = convert_from_path(pdfPath)
     return images
 
 
-def createMetaData(predictions, image, documentName, page):
 
+def createMetaData(predictions, image, documentName, page):
+    objectDetection = ObjectDetection()
     predictions = predictions["instances"].to(demo.cpu_device)
     boxes = predictions.pred_boxes if predictions.has("pred_boxes") else None
     scores = predictions.scores if predictions.has("scores") else None
@@ -66,12 +72,28 @@ def createMetaData(predictions, image, documentName, page):
     for index, item in enumerate(classes):
         if item == 4:
             data = {}
+            obj={}
             box = list(boxes)[index].detach().cpu().numpy()
             # Crop the PIL image using predicted box coordinates
             img_id=uuid.uuid4()
             crop_img = crop_object(image, box)
             img_path = "./output/{}.jpg".format(img_id)
             crop_img.save(img_path)
+            result,className=objectDetection.detect(img_path)
+            #objBoxes=result.pred_boxes if result.has("pred_boxes") else None
+            #objScores=result.scores if result.has("scores") else None
+            objClasses=result.pred_classes.tolist() if result.has("pred_classes") else None
+            objLabels=list(map(lambda x: className[x], objClasses))
+
+            """
+            obj['boxes']=objBoxes
+            obj['scores'] = objScores
+            obj['classes'] = objClasses
+            obj['lables'] = objLabels
+            """
+
+
+            """
             print("pdf name: ",documentName)
             print("page: ",page)
             print("image id : ",img_id)
@@ -79,13 +101,15 @@ def createMetaData(predictions, image, documentName, page):
             print("score : ",scores[index].numpy())
             print("width:",crop_img.width,"px")
             print("height:",crop_img.height,"px")
+            """
             data['pdfName'] = documentName
             data['page'] = page
-            data['image_id'] = 1
+            data['image_id'] = str(img_id)
             data['position'] = boxes.tensor[index].numpy()
             data['score'] = scores[index].numpy()
             data['width'] = crop_img.width
             data['height'] = crop_img.height
+            data['objects']= objLabels
             datas.append(data)
 
 
@@ -168,10 +192,12 @@ if __name__ == "__main__":
     logger.info("Arguments: " + str(args))
 
     cfg = setup_cfg(args)
-
     demo = VisualizationDemo(cfg)
 
-    # TODO simple figure configuration change
+    # TODO title,text,list,figure tespit etmek yerine sadece figure tespit etmesini ayarla
+    # TODO detectObjelerin skor ve boxes bilgileri json dosyada tutulacak
+    # TODO detection sınıfında cv2 ile image dosyadan okumak yerine parametre olarak gönderilecek
+    # TODO koddaki gereksiz methodlar kaldırılacak
 
     if args.input:
         clearOutputFolder()
